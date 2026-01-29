@@ -6,7 +6,7 @@ const BudgetView = ({ refreshTrigger }) => {
 
   const fetchBudget = async () => {
     try {
-      const res = await fetch('http://localhost:3000/api/budget');
+      const res = await fetch('/api/budget');
       const data = await res.json();
       setBudget(data);
     } catch (err) {

@@ -30,7 +30,7 @@ const ReceiptUpload = ({ onSaved }) => {
       const formData = new FormData();
       formData.append('receipt', file);
 
-      const uploadRes = await fetch('http://localhost:3000/api/upload', {
+      const uploadRes = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
       });
@@ -43,7 +43,7 @@ const ReceiptUpload = ({ onSaved }) => {
       setUploading(false);
       setAnalyzing(true);
 
-      const analyzeRes = await fetch('http://localhost:3000/api/analyze', {
+      const analyzeRes = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageUrl: uploadData.url }),
@@ -65,7 +65,7 @@ const ReceiptUpload = ({ onSaved }) => {
     if (!uploadedUrl || !items.length) return;
     setSaving(true);
     try {
-      const saveRes = await fetch('http://localhost:3000/api/receipts', {
+      const saveRes = await fetch('/api/receipts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

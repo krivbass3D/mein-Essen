@@ -1,0 +1,7 @@
+/server/node_modules/
+.idea/mein-Essen.iml
+.idea/modules.xml
+.idea/php.xml
+.idea/vcs.xml
+.idea/workspace.xml
+server/.env

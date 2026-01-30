@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
-// const { Telegraf } = require('telegraf'); // Uncomment when token is ready
+const { Telegraf, Markup } = require('telegraf'); 
 
 const app = express();
 app.use(cors());
@@ -10,6 +10,53 @@ app.use(express.json());
 
 // Supabase Setup
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
+// Telegraf Bot Setup
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+const WEB_APP_URL = 'https://mein-essen.vercel.app'; // Replace with actual Vercel URL
+
+// Bot Logic
+bot.start((ctx) => {
+  ctx.reply('Welcome to mein Essen! 🥦', Markup.inlineKeyboard([
+    Markup.button.webApp('Open App 📱', WEB_APP_URL)
+  ]));
+});
+
+bot.on('text', async (ctx) => {
+    // Basic Budget Check Logic (Duplicated from /api/budget for MVP speed)
+    try {
+        const WEEKLY_LIMIT = 210.00;
+        const now = new Date();
+        const day = now.getDay() || 7; 
+        if (day !== 1) now.setHours(-24 * (day - 1));
+        now.setHours(0, 0, 0, 0);
+        const startOfWeek = now.toISOString();
+
+        const { data: receipts } = await supabase
+            .from('receipts')
+            .select('total_amount')
+            .gte('purchase_date', startOfWeek);
+        
+        const spent = receipts ? receipts.reduce((sum, r) => sum + (r.total_amount || 0), 0) : 0;
+        const remaining = WEEKLY_LIMIT - spent;
+
+        ctx.reply(`💶 Budget Status:\n\nLimit: €${WEEKLY_LIMIT}\nSpent: €${spent.toFixed(2)}\nRemaining: €${remaining.toFixed(2)}`);
+    } catch (e) {
+        console.error(e);
+        ctx.reply('Error checking budget.');
+    }
+});
+
+// Helper for Vercel Webhook
+app.post('/api/webhook', async (req, res) => {
+    try {
+        await bot.handleUpdate(req.body);
+        res.status(200).send('OK');
+    } catch (err) {
+        console.error('Bot Error:', err);
+        res.status(500).send('Error');
+    }
+});
 
 const multer = require('multer');
 

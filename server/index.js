@@ -217,6 +217,9 @@ app.post('/api/receipts', async (req, res) => {
 
     if (itemsError) throw itemsError;
 
+    // Invalidate analytics cache
+    analyticsCache = null;
+
     res.json({ success: true, receiptId: receiptData.id, total: totalAmount.toFixed(2) });
 
   } catch (err) {
@@ -224,6 +227,28 @@ app.post('/api/receipts', async (req, res) => {
     res.status(500).json({ error: 'Failed to save receipt', details: err.message });
   }
 });
+
+// Cache for analytics
+let analyticsCache = null;
+
+/**
+ * Helper to group items by name for context reduction
+ */
+function groupItemsForContext(items) {
+  if (!items || items.length === 0) return 'No data.';
+  const grouped = {};
+  items.forEach(item => {
+    const name = item.name.toLowerCase().trim();
+    if (!grouped[name]) {
+      grouped[name] = { name: item.name, total_price: 0, quantity: 0 };
+    }
+    grouped[name].total_price += (item.total_price || (item.price * item.quantity));
+    grouped[name].quantity += (item.quantity || 1);
+  });
+  return Object.values(grouped).map(i => 
+    `- ${i.name}: ${i.quantity} шт. на сумму €${i.total_price.toFixed(2)}`
+  ).join('\n');
+}
 
 /**
  * GET /api/budget
@@ -280,12 +305,10 @@ app.post('/api/plan', async (req, res) => {
 
     // 1. Get Budget Context
     const now = new Date();
-    // Logic for "Tomorrow"
     const tomorrow = new Date(now);
     tomorrow.setDate(tomorrow.getDate() + 1);
     const dayName = tomorrow.toLocaleDateString('en-US', { weekday: 'long' });
 
-    // Calculate start of week for budget
     const day = now.getDay() || 7; 
     const startOfWeekDate = new Date(now);
     if (day !== 1) startOfWeekDate.setHours(-24 * (day - 1));
@@ -300,14 +323,14 @@ app.post('/api/plan', async (req, res) => {
     const spent = receipts ? receipts.reduce((sum, r) => sum + (r.total_amount || 0), 0) : 0;
     const remaining = WEEKLY_LIMIT - spent;
 
-    // 2. Get Recent Items (to see what we have)
+    // 2. Get Recent Items (Aggregated)
     const { data: recentItems } = await supabase
       .from('receipt_items')
-      .select('name, quantity')
+      .select('name, quantity, total_price')
       .order('id', { ascending: false })
-      .limit(20);
+      .limit(50);
 
-    const pantryContext = recentItems ? recentItems.map(i => `${i.name} (${i.quantity})`).join(', ') : 'None';
+    const pantryContext = groupItemsForContext(recentItems);
 
     // 3. Prompt AI
     const prompt = `
@@ -317,14 +340,14 @@ app.post('/api/plan', async (req, res) => {
       - Spent so far: €${spent.toFixed(2)}
       - Remaining: €${remaining.toFixed(2)}
       - Today is: ${now.toLocaleDateString('en-US', { weekday: 'long' })}. Planning for: ${dayName}.
-      - Recent purchases (in pantry): ${pantryContext}
+      - Recent purchases (pantry):
+      ${pantryContext}
       - Family Wishes: ${wishes || 'None'}
 
       Task:
       Generate a concise shopping list for tomorrow in Russian.
-      - STRICTLY NO intro/outro text (like "Here is your list", "Bon appetit").
+      - STRICTLY NO intro/outro text.
       - Only list items.
-      - If tomorrow is Sunday, include Monday needs.
       - Keep it within budget.
       
       Output Format matches exactly:
@@ -335,7 +358,7 @@ app.post('/api/plan', async (req, res) => {
     `;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4o-mini", // Optimized model
       messages: [
         { role: "system", content: "You are a helpful home assistant." },
         { role: "user", content: prompt }
@@ -344,7 +367,6 @@ app.post('/api/plan', async (req, res) => {
     });
 
     const planText = response.choices[0].message.content;
-
     res.json({ success: true, plan: planText });
 
   } catch (err) {
@@ -360,9 +382,13 @@ app.post('/api/plan', async (req, res) => {
  */
 app.post('/api/analytics', async (req, res) => {
   try {
+    // Return from cache if available
+    if (analyticsCache) {
+      console.log('Serving analytics from cache');
+      return res.json(analyticsCache);
+    }
+
     const WEEKLY_LIMIT = 210.00;
-    
-    // 1. Get Current Week Data
     const now = new Date();
     const day = now.getDay() || 7; 
     const startOfWeekDate = new Date(now);
@@ -370,7 +396,6 @@ app.post('/api/analytics', async (req, res) => {
     startOfWeekDate.setHours(0, 0, 0, 0);
     const startOfWeek = startOfWeekDate.toISOString();
 
-    // Fetch receipts for this week first
     const { data: receipts } = await supabase
       .from('receipts')
       .select('id')
@@ -384,8 +409,6 @@ app.post('/api/analytics', async (req, res) => {
     }
 
     const receiptIds = receipts.map(r => r.id);
-
-    // Fetch items for these receipts
     const { data: items } = await supabase
       .from('receipt_items')
       .select('name, total_price, quantity')
@@ -398,16 +421,16 @@ app.post('/api/analytics', async (req, res) => {
         });
     }
 
-    const itemsText = items.map(i => `- ${i.name}: €${i.total_price.toFixed(2)}`).join('\n');
+    // Aggregate data for AI
+    const itemsText = groupItemsForContext(items);
     const totalSpent = items.reduce((sum, i) => sum + i.total_price, 0);
 
-    // 2. Ask AI to categorize and advise
     const prompt = `
       Analyze these grocery items bought this week (Total: €${totalSpent.toFixed(2)} / Limit: €${WEEKLY_LIMIT}):
       ${itemsText}
 
-      Task 1: Categorize items into 4-6 broad categories (e.g., "Vegetables & Fruits", "Meat & Dairy", "Snacks", "Household", "Grains").
-      Task 2: Evaluate the healthiness and budget efficiency.
+      Task 1: Categorize items into 4-6 broad categories.
+      Task 2: Evaluate healthiness and budget efficiency.
       Task 3: Give one specific, actionable advice for next week in Russian.
 
       Output JSON ONLY:
@@ -420,7 +443,7 @@ app.post('/api/analytics', async (req, res) => {
     `;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4o-mini", // Optimized model
       messages: [
         { role: "system", content: "You are a financial and health analyst. Return strictly valid JSON." },
         { role: "user", content: prompt }
@@ -429,8 +452,8 @@ app.post('/api/analytics', async (req, res) => {
       max_tokens: 1000,
     });
 
-    const result = JSON.parse(response.choices[0].message.content);
-    res.json(result);
+    analyticsCache = JSON.parse(response.choices[0].message.content);
+    res.json(analyticsCache);
 
   } catch (err) {
     console.error('Analytics Error:', err);
@@ -450,13 +473,16 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Invalid messages format' });
     }
 
+    // Limit history to last 5 messages for token optimization
+    const history = messages.slice(-5);
+
     // 1. Get Data from the start of the current month
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
     const { data: receipts } = await supabase
       .from('receipts')
-      .select('id, total_amount, purchase_date, merchant_name')
+      .select('id')
       .gte('purchase_date', startOfMonth);
 
     let itemsContext = 'No data for this month.';
@@ -467,34 +493,27 @@ app.post('/api/chat', async (req, res) => {
         .select('name, total_price, quantity, price')
         .in('receipt_id', receiptIds);
 
-      if (items && items.length > 0) {
-        itemsContext = items.map(i => `- ${i.name}: ${i.quantity} x €${i.price.toFixed(2)} = €${i.total_price.toFixed(2)}`).join('\n');
-      }
+      // Aggregated items for chat context
+      itemsContext = groupItemsForContext(items);
     }
 
-    // 2. Build System Prompt
     const systemPrompt = `
       You are a precise financial assistant for the "mein Essen" app. 
-      You have access to the user's grocery purchase data for the CURRENT MONTH.
-      
-      PURCHASE DATA FOR THIS MONTH:
+      DATA FOR THIS MONTH (Aggregated):
       ${itemsContext}
       
       RULES:
-      1. ONLY answer questions related to the provided purchase data, budget, and spending.
-      2. If a question is NOT about finances or grocery purchases, politely refuse in Russian.
-      3. Be extremely precise with numbers. 
-      4. Do NOT hallucinate or invent purchases that are not in the list.
-      5. Answer in Russian, keep it friendly but professional.
-      6. If you are not sure or the data is missing, say so honestly.
+      1. ONLY answer about provided data/budget.
+      2. If off-topic, politely refuse in Russian.
+      3. Be precise. No hallucinating.
+      4. Answer in Russian.
     `;
 
-    // 3. Call OpenAI
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4o-mini", // Optimized model
       messages: [
         { role: "system", content: systemPrompt },
-        ...messages
+        ...history
       ],
       max_tokens: 1000,
     });
@@ -512,14 +531,7 @@ app.post('/api/chat', async (req, res) => {
 bot.command('analytics', async (ctx) => {
     ctx.reply('⏳ Analyzing your week... please wait.');
     
-    // Invoke the analytics logic internally (simplified for bot)
-    // Ideally refactor logic to a shared function
     try {
-       // ... fetch and call AI (similar to endpoint) ... 
-       // For MVP, simply directing user to App or giving a stub
-       // Let's call the logic directly if possible or fetch own API if deployed
-       // To keep it simple in monolith:
-       
        const now = new Date();
        const day = now.getDay() || 7; 
        const startOfWeekDate = new Date(now);
@@ -529,7 +541,7 @@ bot.command('analytics', async (ctx) => {
 
        const { data: items } = await supabase
         .from('receipt_items')
-        .select('name, total_price')
+        .select('name, total_price, quantity')
         .gte('created_at', startOfWeek);
 
        if (!items || items.length === 0) {
@@ -537,13 +549,13 @@ bot.command('analytics', async (ctx) => {
        }
        
        const totalSpent = items.reduce((sum, i) => sum + i.total_price, 0);
-       const itemsText = items.map(i => `${i.name}`).join(', ');
+       const itemsContext = groupItemsForContext(items);
 
        const response = await openai.chat.completions.create({
-          model: "gpt-4o",
+          model: "gpt-4o-mini", // Optimized model
           messages: [
             { role: "system", content: "You are a helpful assistant." },
-            { role: "user", content: `Analyze these purchases: ${itemsText}. Total: €${totalSpent.toFixed(2)}. Give a short summary in Russian about what was bought and one tip.` }
+            { role: "user", content: `Analyze these purchases:\n${itemsContext}\nTotal: €${totalSpent.toFixed(2)}. Give a short summary in Russian about what was bought and one tip.` }
           ],
           max_tokens: 300,
        });

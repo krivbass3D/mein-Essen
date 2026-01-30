@@ -145,7 +145,7 @@ app.post('/api/analyze', async (req, res) => {
       messages: [
         {
           role: "system",
-          content: "You are a receipt parser. Extract items from the receipt image. Return ONLY raw JSON array with no markdown formatting. Format: [{ \"name\": \"Item Name\", \"qty\": 1, \"price\": 0.00 }]. If quantity is missing, assume 1. Fix typos if obvious."
+          content: "You are a receipt parser. Extract items from the receipt image. Return valid JSON only. Format: { \"items\": [{ \"name\": \"Item Name\", \"qty\": 1, \"price\": 0.00 }] }. If quantity is missing, assume 1. Fix typos if obvious."
         },
         {
           role: "user",
@@ -160,15 +160,13 @@ app.post('/api/analyze', async (req, res) => {
           ],
         },
       ],
-      max_tokens: 1000,
+      response_format: { type: "json_object" },
+      max_tokens: 4000,
     });
 
     const content = response.choices[0].message.content;
-    
-    // Clean up markdown if AI adds it
-    const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
-    
-    const items = JSON.parse(cleanContent);
+    const result = JSON.parse(content);
+    const items = result.items || [];
 
     res.json({ success: true, items });
 

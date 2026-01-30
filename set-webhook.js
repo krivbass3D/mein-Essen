@@ -4,7 +4,7 @@
  * Example: node set-webhook.js https://mein-essen.vercel.app
  */
 
-const token = process.env.TELEGRAM_BOT_TOKEN || '8589210318:AAFARUP4E6vxw61AW7jvaw_bf2vA0yj5fg0';
+const token = process.env.TELEGRAM_BOT_TOKEN;
 const url = process.argv[2];
 
 if (!url) {

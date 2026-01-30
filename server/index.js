@@ -355,6 +355,124 @@ app.post('/api/plan', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/analytics
+ * Analyzes weekly spending using AI.
+ * Returns: { categories: [{name, value, color}], advice: string }
+ */
+app.post('/api/analytics', async (req, res) => {
+  try {
+    const WEEKLY_LIMIT = 210.00;
+    
+    // 1. Get Current Week Data
+    const now = new Date();
+    const day = now.getDay() || 7; 
+    const startOfWeekDate = new Date(now);
+    if (day !== 1) startOfWeekDate.setHours(-24 * (day - 1));
+    startOfWeekDate.setHours(0, 0, 0, 0);
+    const startOfWeek = startOfWeekDate.toISOString();
+
+    // Fetch all items bought this week
+    const { data: items } = await supabase
+      .from('receipt_items')
+      .select('name, total_price, quantity')
+      .gte('created_at', startOfWeek); // Assuming created_at approximates purchase time for now
+
+    if (!items || items.length === 0) {
+        return res.json({ 
+            categories: [{ name: 'No Data', value: 100, color: '#e5e7eb' }], 
+            advice: 'No purchases recorded this week yet.' 
+        });
+    }
+
+    const itemsText = items.map(i => `- ${i.name}: €${i.total_price.toFixed(2)}`).join('\n');
+    const totalSpent = items.reduce((sum, i) => sum + i.total_price, 0);
+
+    // 2. Ask AI to categorize and advise
+    const prompt = `
+      Analyze these grocery items bought this week (Total: €${totalSpent.toFixed(2)} / Limit: €${WEEKLY_LIMIT}):
+      ${itemsText}
+
+      Task 1: Categorize items into 4-6 broad categories (e.g., "Vegetables & Fruits", "Meat & Dairy", "Snacks", "Household", "Grains").
+      Task 2: Evaluate the healthiness and budget efficiency.
+      Task 3: Give one specific, actionable advice for next week in Russian.
+
+      Output JSON ONLY:
+      {
+        "categories": [
+          { "name": "Category Name IN RUSSIAN", "value": Total_Vol_In_Euro, "color": "HexColorCode" }
+        ],
+        "advice": "Short, friendly advice in Russian (max 2 sentences)."
+      }
+    `;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: "You are a financial and health analyst. Return strictly valid JSON." },
+        { role: "user", content: prompt }
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 1000,
+    });
+
+    const result = JSON.parse(response.choices[0].message.content);
+    res.json(result);
+
+  } catch (err) {
+    console.error('Analytics Error:', err);
+    res.status(500).json({ error: 'Failed to generate analytics', details: err.message });
+  }
+});
+
+// Bot Logic Update
+bot.command('analytics', async (ctx) => {
+    ctx.reply('⏳ Analyzing your week... please wait.');
+    
+    // Invoke the analytics logic internally (simplified for bot)
+    // Ideally refactor logic to a shared function
+    try {
+       // ... fetch and call AI (similar to endpoint) ... 
+       // For MVP, simply directing user to App or giving a stub
+       // Let's call the logic directly if possible or fetch own API if deployed
+       // To keep it simple in monolith:
+       
+       const now = new Date();
+       const day = now.getDay() || 7; 
+       const startOfWeekDate = new Date(now);
+       if (day !== 1) startOfWeekDate.setHours(-24 * (day - 1));
+       startOfWeekDate.setHours(0, 0, 0, 0);
+       const startOfWeek = startOfWeekDate.toISOString();
+
+       const { data: items } = await supabase
+        .from('receipt_items')
+        .select('name, total_price')
+        .gte('created_at', startOfWeek);
+
+       if (!items || items.length === 0) {
+           return ctx.reply('No data for this week yet.');
+       }
+       
+       const totalSpent = items.reduce((sum, i) => sum + i.total_price, 0);
+       const itemsText = items.map(i => `${i.name}`).join(', ');
+
+       const response = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            { role: "system", content: "You are a helpful assistant." },
+            { role: "user", content: `Analyze these purchases: ${itemsText}. Total: €${totalSpent.toFixed(2)}. Give a short summary in Russian about what was bought and one tip.` }
+          ],
+          max_tokens: 300,
+       });
+
+       ctx.reply(response.choices[0].message.content);
+
+    } catch (e) {
+        console.error(e);
+        ctx.reply('Error getting analytics.');
+    }
+});
+
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

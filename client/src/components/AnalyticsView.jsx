@@ -70,6 +70,116 @@ export default function AnalyticsView() {
           </div>
         </div>
       </div>
+
+      {/* AI Chat Section */}
+      <ChatSection />
+    </div>
+  );
+}
+
+function ChatSection() {
+  const [messages, setMessages] = useState([
+    { role: 'assistant', content: 'Привет! Я изучил ваши покупки за этот месяц. Есть вопросы по бюджету или тратам?' }
+  ]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const chatEndRef = React.useRef(null);
+
+  const scrollToBottom = () => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const handleSend = async (e) => {
+    e.preventDefault();
+    if (!input.trim() || loading) return;
+
+    const userMsg = { role: 'user', content: input };
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
+    setLoading(true);
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [...messages, userMsg] })
+      });
+      const d = await response.json();
+      if (d.success) {
+        setMessages(prev => [...prev, { role: 'assistant', content: d.answer }]);
+      } else {
+        setMessages(prev => [...prev, { role: 'assistant', content: 'Ошибка при связи с ИИ.' }]);
+      }
+    } catch (err) {
+      console.error(err);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Не удалось отправить сообщение.' }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="mt-8">
+      <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+        <span>💬</span> Вопросы к ИИ
+      </h3>
+      
+      <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 min-h-[300px] max-h-[500px] flex flex-col">
+        {/* Messages scrollable area */}
+        <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-2 custom-scrollbar">
+          {messages.map((msg, idx) => (
+            <div 
+              key={idx} 
+              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
+              <div className={`
+                max-w-[85%] px-4 py-2 rounded-2xl text-sm
+                ${msg.role === 'user' 
+                  ? 'bg-indigo-600 text-white rounded-tr-none' 
+                  : 'bg-white text-slate-800 shadow-sm border border-slate-100 rounded-tl-none'}
+              `}>
+                {msg.content}
+              </div>
+            </div>
+          ))}
+          {loading && (
+            <div className="flex justify-start">
+              <div className="bg-white px-4 py-2 rounded-2xl rounded-tl-none shadow-sm border border-slate-100 flex gap-1">
+                <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce"></span>
+                <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></span>
+                <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></span>
+              </div>
+            </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+
+        {/* Input area */}
+        <form onSubmit={handleSend} className="relative">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            disabled={loading}
+            placeholder="Спросите о ваших тратах..."
+            className="w-full bg-white border border-slate-200 rounded-full py-3 pl-5 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all shadow-sm disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={loading || !input.trim()}
+            className="absolute right-2 top-1.5 bg-indigo-600 text-white p-2 rounded-full hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:bg-slate-400"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

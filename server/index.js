@@ -438,6 +438,76 @@ app.post('/api/analytics', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/chat
+ * Handles user questions about their budget and purchases.
+ * Body: { messages: Array<{role, content}> }
+ */
+app.post('/api/chat', async (req, res) => {
+  try {
+    const { messages } = req.body;
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'Invalid messages format' });
+    }
+
+    // 1. Get Data from the start of the current month
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+    const { data: receipts } = await supabase
+      .from('receipts')
+      .select('id, total_amount, purchase_date, merchant_name')
+      .gte('purchase_date', startOfMonth);
+
+    let itemsContext = 'No data for this month.';
+    if (receipts && receipts.length > 0) {
+      const receiptIds = receipts.map(r => r.id);
+      const { data: items } = await supabase
+        .from('receipt_items')
+        .select('name, total_price, quantity, price')
+        .in('receipt_id', receiptIds);
+
+      if (items && items.length > 0) {
+        itemsContext = items.map(i => `- ${i.name}: ${i.quantity} x €${i.price.toFixed(2)} = €${i.total_price.toFixed(2)}`).join('\n');
+      }
+    }
+
+    // 2. Build System Prompt
+    const systemPrompt = `
+      You are a precise financial assistant for the "mein Essen" app. 
+      You have access to the user's grocery purchase data for the CURRENT MONTH.
+      
+      PURCHASE DATA FOR THIS MONTH:
+      ${itemsContext}
+      
+      RULES:
+      1. ONLY answer questions related to the provided purchase data, budget, and spending.
+      2. If a question is NOT about finances or grocery purchases, politely refuse in Russian.
+      3. Be extremely precise with numbers. 
+      4. Do NOT hallucinate or invent purchases that are not in the list.
+      5. Answer in Russian, keep it friendly but professional.
+      6. If you are not sure or the data is missing, say so honestly.
+    `;
+
+    // 3. Call OpenAI
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...messages
+      ],
+      max_tokens: 1000,
+    });
+
+    const answer = response.choices[0].message.content;
+    res.json({ success: true, answer });
+
+  } catch (err) {
+    console.error('Chat Error:', err);
+    res.status(500).json({ error: 'Failed to process chat', details: err.message });
+  }
+});
+
 // Bot Logic Update
 bot.command('analytics', async (ctx) => {
     ctx.reply('⏳ Analyzing your week... please wait.');

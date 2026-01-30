@@ -372,16 +372,31 @@ app.post('/api/analytics', async (req, res) => {
     startOfWeekDate.setHours(0, 0, 0, 0);
     const startOfWeek = startOfWeekDate.toISOString();
 
-    // Fetch all items bought this week
+    // Fetch receipts for this week first
+    const { data: receipts } = await supabase
+      .from('receipts')
+      .select('id')
+      .gte('purchase_date', startOfWeek);
+
+    if (!receipts || receipts.length === 0) {
+        return res.json({ 
+            categories: [{ name: 'Нет данных', value: 100, color: '#e5e7eb' }], 
+            advice: 'Пока нет покупок за эту неделю.' 
+        });
+    }
+
+    const receiptIds = receipts.map(r => r.id);
+
+    // Fetch items for these receipts
     const { data: items } = await supabase
       .from('receipt_items')
       .select('name, total_price, quantity')
-      .gte('created_at', startOfWeek); // Assuming created_at approximates purchase time for now
+      .in('receipt_id', receiptIds);
 
     if (!items || items.length === 0) {
         return res.json({ 
-            categories: [{ name: 'No Data', value: 100, color: '#e5e7eb' }], 
-            advice: 'No purchases recorded this week yet.' 
+             categories: [{ name: 'Нет данных', value: 100, color: '#e5e7eb' }], 
+            advice: 'Пока нет покупок за эту неделю.' 
         });
     }
 
